@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shkolla Digjitale — Wall Calendar</title>
+
+<!--
+  HOW THIS PAGE WORKS
+  --------------------
+  1. Your event data lives in a Google Sheet (tab named "Events").
+  2. That sheet is "Published to the web" as CSV — Google then hosts a public
+     CSV file that updates automatically every time you edit the sheet.
+  3. This page fetches that CSV in the visitor's browser and draws the
+     calendar from it. No backend, no build step — just this one HTML file.
+  4. This file lives in a GitHub repo and is served for free by GitHub Pages.
+
+  SETUP — do this once:
+  1. In Google Sheets: File -> Share -> Publish to web -> choose the "Events"
+     sheet/tab -> format "Comma-separated values (.csv)" -> Publish.
+     Copy the URL it gives you.
+  2. Paste that URL into CSV_URL below, replacing the placeholder.
+  3. Commit this file to a GitHub repo, then in the repo go to
+     Settings -> Pages -> Source: "Deploy from branch" -> main / (root) -> Save.
+     GitHub gives you a URL like https://<username>.github.io/<repo>/ — that's
+     your live calendar.
+
+  Sheet columns expected (row 1 = header):
+    A: Event name
+    B: Type          -> "External" or "Internal"
+    C: Start date     -> YYYY-MM-DD, or blank if unknown/TBD
+    D: End date       -> YYYY-MM-DD, optional (defaults to Start date)
+    E: Shifted note   -> optional, anything non-empty flags "moved to next year"
+-->
+<script>
+  // 1) Paste your "Publish to web" CSV link here:
+  const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQE1hkgaDDf0srO7PNCsJ36wnUXsktwWm-IqqrFFrtCratd6H-fO2rJfYdRZ3_B2_zCeS38HJfjMAPV/pubhtml?gid=263601558&single=true";
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+  :root{
+    --surface: #F4F2EC; --page: #FFFFFF; --ink: #1C1B18; --ink-muted: #6B655E; --ink-faint: #A39C8E;
+    --line: #E7E1D3; --line-strong: #D8D0BC; --external: #3860C9; --internal: #1E8F5E;
+    --warn: #B5731A; --warn-soft: #F7E9D6; --other-month: #C8C1B0;
+    --shadow: 0 1px 2px rgba(28,27,24,0.05), 0 10px 24px -14px rgba(28,27,24,0.18);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --surface:#171511; --page:#211F1A; --ink:#F1EDE3; --ink-muted:#B3AA98; --ink-faint:#756C5C;
+      --line:#34302A; --line-strong:#423D34; --external:#8FADFF; --internal:#62D19E;
+      --warn:#E3A758; --warn-soft:#3B2E19; --other-month:#4A4438;
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 26px -14px rgba(0,0,0,0.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --surface:#171511; --page:#211F1A; --ink:#F1EDE3; --ink-muted:#B3AA98; --ink-faint:#756C5C;
+    --line:#34302A; --line-strong:#423D34; --external:#8FADFF; --internal:#62D19E;
+    --warn:#E3A758; --warn-soft:#3B2E19; --other-month:#4A4438;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 10px 26px -14px rgba(0,0,0,0.6);
+  }
+
+  *{ box-sizing: border-box; }
+  body{ background: var(--surface); color: var(--ink); font-family:'Manrope',system-ui,sans-serif; margin:0; }
+  .wrap{ max-width: 1220px; margin:0 auto; padding: 34px 22px 60px; }
+
+  header.page{ margin-bottom: 20px; }
+  h1{ font-size: 25px; font-weight: 800; letter-spacing:-0.01em; margin:0 0 5px; }
+  .sub{ color: var(--ink-muted); font-size: 13.5px; margin: 0 0 14px; max-width: 68ch; }
+
+  .notice{
+    display:flex; gap:10px; align-items:flex-start; background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-left: 3px solid var(--warn);
+    border-radius: 8px; padding: 10px 14px; font-size: 12.5px; color: var(--ink); max-width: 78ch; margin-bottom: 16px;
+  }
+  .notice svg{ flex:none; margin-top:1px; }
+  .notice b{ font-weight: 700; }
+  .notice.error{ background:#F8DEDC; border-color:#D9564C; border-left-color:#D9564C; }
+  :root[data-theme="dark"] .notice.error, @media (prefers-color-scheme: dark){ .notice.error{ background:#3B1E1B; } }
+
+  .legend{ display:flex; gap:20px; align-items:center; flex-wrap:wrap; margin-bottom: 4px; }
+  .legend .item{ display:flex; align-items:center; gap:7px; font-size:12px; color:var(--ink-muted); font-family:'JetBrains Mono',monospace; }
+  .swatch{ width:10px; height:10px; border-radius:3px; flex:none; }
+  .swatch.ext{ background: var(--external); }
+  .swatch.int{ background: var(--internal); }
+  .swatch.shift{ background:transparent; border:1.5px dashed var(--warn); }
+
+  .poster{ display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr)); gap: 16px; margin: 22px 0 40px; }
+  .month-tile{ background: var(--page); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display:flex; flex-direction: column; }
+  .month-tile.empty{ opacity: .55; }
+  .tile-head{ padding: 10px 14px 8px; border-bottom: 1px solid var(--line); display:flex; align-items:baseline; justify-content: space-between; }
+  .tile-head .m{ font-size: 14.5px; font-weight: 800; }
+  .tile-head .y{ font-family:'JetBrains Mono',monospace; font-size: 11px; color: var(--ink-faint); }
+
+  .weekday-row{ display:grid; grid-template-columns: repeat(7,1fr); padding: 6px 8px 0; }
+  .weekday-row span{ text-align:center; font-family:'JetBrains Mono',monospace; font-size: 9px; letter-spacing:.03em; color: var(--ink-faint); font-weight:600; }
+  .day-grid{ display:grid; grid-template-columns: repeat(7,1fr); padding: 2px 8px 10px; gap: 2px 0; }
+  .day-cell{ display:flex; flex-direction:column; align-items:center; padding-top: 3px; min-height: 34px; }
+  .day-cell .num{ font-size: 10.5px; font-weight:600; color: var(--ink); font-family:'JetBrains Mono',monospace; width:18px; height:18px; line-height:18px; text-align:center; border-radius:50%; }
+  .day-cell.pad .num{ color: var(--other-month); font-weight: 400; }
+  .day-cell.today .num{ background: var(--ink); color: var(--page); }
+  .bar-slot{ width: 100%; height: 5px; margin-top: 2px; padding: 0 1px; }
+  .bar{ height: 100%; }
+  .bar.ext{ background: var(--external); }
+  .bar.int{ background: var(--internal); }
+  .bar.cap-l{ border-top-left-radius: 3px; border-bottom-left-radius: 3px; margin-left: 2px; }
+  .bar.cap-r{ border-top-right-radius: 3px; border-bottom-right-radius: 3px; margin-right: 2px; }
+
+  .tile-notes{ border-top: 1px solid var(--line); padding: 8px 14px 11px; display:flex; flex-direction:column; gap: 5px; }
+  .tile-notes .note{ display:flex; align-items:baseline; gap: 6px; font-size: 11px; line-height:1.35; }
+  .tile-notes .note .d{ font-family:'JetBrains Mono',monospace; color: var(--ink-faint); flex:none; width:20px; }
+  .tile-notes .note .t{ color: var(--ink); font-weight: 600; }
+  .tile-notes .note .dot{ width:6px;height:6px;border-radius:50%;flex:none; margin-right:2px; }
+  .tile-notes .note .dot.ext{ background:var(--external); }
+  .tile-notes .note .dot.int{ background:var(--internal); }
+  .tile-notes .shifted{ font-size: 9.5px; color: var(--warn); font-family:'JetBrains Mono',monospace; margin-left: 4px; }
+  .tile-notes .none{ font-size: 11px; color: var(--ink-faint); font-style: italic; }
+
+  .panel{ background: var(--page); border:1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow:hidden; }
+  .panel-head{ padding: 13px 18px 10px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:baseline; }
+  .panel-head h2{ font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; font-weight:700; color:var(--ink-muted); margin:0; }
+  .panel-head .n{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink-faint); }
+  .tbd-grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(230px,1fr)); gap:10px; padding:14px 16px 16px; }
+  .tbd-card{ background: var(--surface); border:1px solid var(--line); border-radius:9px; padding:9px 11px; display:flex; flex-direction:column; gap:5px; }
+  .tbd-card .name{ font-size:12px; font-weight:700; line-height:1.3; }
+  .tbd-card .tag{ display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:9.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-muted); }
+  .tbd-card .tag .dot{ width:6px;height:6px;border-radius:50%; }
+  .tbd-card .tag .dot.ext{ background:var(--external); }
+  .tbd-card .tag .dot.int{ background:var(--internal); }
+
+  footer{ color: var(--ink-faint); font-size:11px; font-family:'JetBrains Mono',monospace; text-align:center; margin-top: 22px; }
+  @media (max-width: 560px){ h1{ font-size:20px; } .wrap{ padding: 22px 14px 44px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Shkolla Digjitale — Wall Calendar</h1>
+    <p class="sub">Live view of the "Events" Google Sheet — edit a row there and reload this page to see the change.</p>
+    <div id="noticeBox">
+      <div class="notice">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="margin-top:2px"><path d="M12 2 1 21h22L12 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.5" r="1" fill="currentColor"/></svg>
+        <span><b>Treat dates as planning guidance.</b> Anything marked <span style="color:var(--warn)">✦ moved</span> was rolled forward from a past edition and is estimated, not confirmed.</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span class="item"><span class="swatch ext"></span>External</span>
+      <span class="item"><span class="swatch int"></span>Internal</span>
+      <span class="item"><span class="swatch shift"></span>moved to next year (estimated)</span>
+    </div>
+  </header>
+
+  <div class="poster" id="poster"><p class="sub">Loading events…</p></div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Unscheduled — dates TBD</h2><span class="n" id="tbdN"></span></div>
+    <div class="tbd-grid" id="tbdGrid"></div>
+  </div>
+
+  <footer id="footerNote"></footer>
+</div>
+
+<script>
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const WD = ["M","T","W","T","F","S","S"];
+
+function daysInMonth(y,m){ return new Date(y, m, 0).getDate(); }
+function fmtDate(y,m,day){ return `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`; }
+function mondayIdx(y,m,day){ const w = new Date(Date.UTC(y,m-1,day)).getUTCDay(); return (w+6)%7; }
+function toISO(v){
+  if(!v) return null;
+  v = String(v).trim();
+  if(!v) return null;
+  const m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  const d = new Date(v);
+  if(isNaN(d)) return null;
+  return d.toISOString().slice(0,10);
+}
+
+function showError(msg){
+  document.getElementById('noticeBox').innerHTML =
+    `<div class="notice error"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="margin-top:2px"><path d="M12 2 1 21h22L12 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 9v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17.5" r="1" fill="currentColor"/></svg>
+    <span><b>Couldn't load the sheet.</b> ${msg}</span></div>`;
+  document.getElementById('poster').innerHTML = '';
+}
+
+function render(rawEvents){
+  const events = rawEvents.filter(e => e.start);
+  const unscheduled = rawEvents.filter(e => !e.start);
+
+  const now = new Date();
+  const TODAY = now.toISOString().slice(0,10);
+
+  const sorted = [...events].sort((a,b)=> a.start.localeCompare(b.start));
+  const laneFree = [];
+  sorted.forEach(ev=>{
+    let lane = laneFree.findIndex(freeUntil => freeUntil < ev.start);
+    if(lane === -1){ lane = laneFree.length; laneFree.push(ev.end); }
+    else { laneFree[lane] = ev.end; }
+    ev.lane = lane;
+  });
+  const maxLanes = Math.max(1, ...events.map(e=>e.lane+1), 1);
+
+  let startY = now.getFullYear(), startM = now.getMonth()+1;
+  let farthest = events.reduce((max,e)=> e.end > max ? e.end : max, fmtDate(startY,startM,1));
+  let [fy,fm] = farthest.split('-').map(Number);
+  let span = (fy*12+fm) - (startY*12+startM) + 1;
+  span = Math.min(18, Math.max(6, span));
+
+  const poster = document.getElementById('poster');
+  poster.innerHTML = '';
+  const range = [];
+  { let y=startY, m=startM;
+    for(let i=0;i<span;i++){ range.push({y,m}); m++; if(m>12){ m=1; y++; } }
+  }
+
+  range.forEach(({y,m})=>{
+    const tile = document.createElement('div');
+    const dim = daysInMonth(y,m);
+    const monthEvents = events.filter(ev => !(ev.end < fmtDate(y,m,1) || ev.start > fmtDate(y,m,dim)));
+    tile.className = 'month-tile' + (monthEvents.length===0 ? ' empty' : '');
+
+    const head = document.createElement('div');
+    head.className = 'tile-head';
+    head.innerHTML = `<span class="m">${MONTHS[m-1]}</span><span class="y">${y}</span>`;
+    tile.appendChild(head);
+
+    const wdRow = document.createElement('div');
+    wdRow.className = 'weekday-row';
+    wdRow.innerHTML = WD.map(l=>`<span>${l}</span>`).join('');
+    tile.appendChild(wdRow);
+
+    const dayGrid = document.createElement('div');
+    dayGrid.className = 'day-grid';
+    const leadPad = mondayIdx(y,m,1);
+    const totalCells = Math.ceil((leadPad+dim)/7)*7;
+
+    for(let c=0;c<totalCells;c++){
+      const dayNum = c - leadPad + 1;
+      const cell = document.createElement('div');
+      if(dayNum < 1 || dayNum > dim){
+        const pm = m===1?12:m-1, py = m===1?y-1:y;
+        cell.className = 'day-cell pad';
+        cell.innerHTML = `<span class="num">${dayNum<1 ? daysInMonth(py,pm)+dayNum : dayNum-dim}</span>`;
+      } else {
+        const dateStr = fmtDate(y,m,dayNum);
+        cell.className = 'day-cell' + (dateStr===TODAY ? ' today' : '');
+        cell.innerHTML = `<span class="num">${dayNum}</span>`;
+        for(let lane=0; lane<maxLanes; lane++){
+          const slot = document.createElement('div');
+          slot.className = 'bar-slot';
+          const ev = monthEvents.find(e=> e.lane===lane && e.start<=dateStr && dateStr<=e.end);
+          if(ev){
+            const bar = document.createElement('div');
+            bar.className = 'bar ' + (ev.type==='External'?'ext':'int');
+            if(dateStr===ev.start) bar.classList.add('cap-l');
+            if(dateStr===ev.end) bar.classList.add('cap-r');
+            bar.title = `${ev.name} · ${ev.start}${ev.end!==ev.start? ' – '+ev.end:''}`;
+            slot.appendChild(bar);
+          }
+          cell.appendChild(slot);
+        }
+      }
+      dayGrid.appendChild(cell);
+    }
+    tile.appendChild(dayGrid);
+
+    const notes = document.createElement('div');
+    notes.className = 'tile-notes';
+    if(monthEvents.length){
+      monthEvents.slice().sort((a,b)=>a.start.localeCompare(b.start)).forEach(ev=>{
+        const startsHere = ev.start >= fmtDate(y,m,1);
+        const day = startsHere ? parseInt(ev.start.slice(8),10) : 1;
+        const note = document.createElement('div');
+        note.className = 'note';
+        note.innerHTML = `<span class="d">${startsHere?String(day).padStart(2,'0'):'→'}</span><span class="dot ${ev.type==='External'?'ext':'int'}"></span><span class="t">${ev.name}</span>${ev.shifted?'<span class="shifted">✦ moved</span>':''}`;
+        notes.appendChild(note);
+      });
+    } else {
+      notes.innerHTML = '<span class="none">No events yet</span>';
+    }
+    tile.appendChild(notes);
+    poster.appendChild(tile);
+  });
+
+  document.getElementById('tbdN').textContent = unscheduled.length + ' events';
+  const tbdGrid = document.getElementById('tbdGrid');
+  tbdGrid.innerHTML = '';
+  unscheduled.forEach(ev=>{
+    const card = document.createElement('div');
+    card.className = 'tbd-card';
+    card.innerHTML = `<span class="name">${ev.name}</span><span class="tag"><span class="dot ${ev.type==='External'?'ext':'int'}"></span>${ev.type}</span>`;
+    tbdGrid.appendChild(card);
+  });
+
+  document.getElementById('footerNote').textContent =
+    'reading live from the published Google Sheet · today = ' + TODAY + ' · last fetched ' + now.toLocaleTimeString();
+}
+
+function loadFromCsv(){
+  if(!CSV_URL || CSV_URL.includes('PASTE_YOUR_PUBLISHED_ID_HERE')){
+    showError('Open this file and set <code>CSV_URL</code> to your Google Sheet\'s "Publish to web" CSV link (see the comment at the top of the file).');
+    return;
+  }
+  Papa.parse(CSV_URL, {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    complete: function(results){
+      try{
+        const rows = results.data.map(r=>{
+          const name = (r['Event name']||'').trim();
+          let type = (r['Type']||'External').trim();
+          if(type !== 'External' && type !== 'Internal') type = 'External';
+          const start = toISO(r['Start date']);
+          const end = toISO(r['End date']) || start;
+          const shifted = !!(r['Shifted note']||'').trim();
+          return { name, type, start, end, shifted };
+        }).filter(r=>r.name);
+        if(!rows.length) throw new Error('empty');
+        render(rows);
+      } catch(e){
+        showError('The sheet loaded but its columns don\'t match what\'s expected (Event name, Type, Start date, End date, Shifted note).');
+      }
+    },
+    error: function(){
+      showError('The CSV link didn\'t respond. Make sure the sheet is published (File → Share → Publish to web) and CSV_URL is pasted correctly.');
+    }
+  });
+}
+
+loadFromCsv();
+</script>
+</body>
+</html>
