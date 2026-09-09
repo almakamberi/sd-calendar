@@ -5,33 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shkolla Digjitale — Wall Calendar</title>
 
-<!--
-  HOW THIS PAGE WORKS
-  --------------------
-  1. Your event data lives in a Google Sheet (tab named "Events").
-  2. That sheet is "Published to the web" as CSV — Google then hosts a public
-     CSV file that updates automatically every time you edit the sheet.
-  3. This page fetches that CSV in the visitor's browser and draws the
-     calendar from it. No backend, no build step — just this one HTML file.
-  4. This file lives in a GitHub repo and is served for free by GitHub Pages.
 
-  SETUP — do this once:
-  1. In Google Sheets: File -> Share -> Publish to web -> choose the "Events"
-     sheet/tab -> format "Comma-separated values (.csv)" -> Publish.
-     Copy the URL it gives you.
-  2. Paste that URL into CSV_URL below, replacing the placeholder.
-  3. Commit this file to a GitHub repo, then in the repo go to
-     Settings -> Pages -> Source: "Deploy from branch" -> main / (root) -> Save.
-     GitHub gives you a URL like https://<username>.github.io/<repo>/ — that's
-     your live calendar.
-
-  Sheet columns expected (row 1 = header):
-    A: Event name
-    B: Type          -> "External" or "Internal"
-    C: Start date     -> YYYY-MM-DD, or blank if unknown/TBD
-    D: End date       -> YYYY-MM-DD, optional (defaults to Start date)
-    E: Shifted note   -> optional, anything non-empty flags "moved to next year"
--->
 <script>
   // 1) Paste your "Publish to web" CSV link here:
   const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQE1hkgaDDf0srO7PNCsJ36wnUXsktwWm-IqqrFFrtCratd6H-fO2rJfYdRZ3_B2_zCeS38HJfjMAPV/pubhtml?gid=263601558&single=true";
